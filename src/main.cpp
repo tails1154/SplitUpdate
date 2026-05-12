@@ -2,6 +2,8 @@
  * Include the Geode headers.
  */
 #include <Geode/Geode.hpp>
+#include <Geode/utils/web.hpp>
+#include <Geode/binding/LoadingCircle.hpp>
 
 /**
  * Brings cocos2d and all Geode namespaces to the current scope.
@@ -22,11 +24,16 @@ using namespace geode::prelude;
  *
  * Another way you could do this is like this:
  *
- * struct MyMenuLayer : Modify<MyMenuLayer, MenuLayer> {};
+ * struct MyLoadingLayer : Modify<MyLoadingLayer, LoadingLayer> {};
  */
-#include <Geode/modify/MenuLayer.hpp>
-class $modify(SplitUpdateLayer, MenuLayer)
+#include <Geode/modify/LoadingLayer.hpp>
+#include <Geode/cocos/CCDirector.h>
+class $modify(SplitUpdateLayer, LoadingLayer)
 {
+	struct Fields
+	{
+		async::TaskHolder<web::WebResponse> m_listener;
+	}
 	/**
 	 * Typically classes in GD are initialized using the `init` function, (though not always!),
 	 * so here we use it to add our own button to the bottom menu.
@@ -34,16 +41,14 @@ class $modify(SplitUpdateLayer, MenuLayer)
 	 * Note that for all hooks, your signature has to *match exactly*,
 	 * `void init()` would not place a hook!
 	 */
-	bool init()
+	void
+	loadingFinished()
 	{
+		auto version = "v1.0.0";
 		/**
 		 * We call the original init function so that the
 		 * original class is properly initialized.
 		 */
-		if (!MenuLayer::init())
-		{
-			return false;
-		}
 
 		/**
 		 * You can use methods from the `geode::log` namespace to log messages to the console,
@@ -55,48 +60,64 @@ class $modify(SplitUpdateLayer, MenuLayer)
 		 * See this page for more info about buttons
 		 * https://docs.geode-sdk.org/tutorials/buttons
 		 */
-		auto myButton = CCMenuItemSpriteExtra::create(
-			CCSprite::createWithSpriteFrameName("GJ_likeBtn_001.png"),
-			this,
-			/**
-			 * Here we use the name we set earlier for our modify class.
-			 */
-			menu_selector(SplitUpdateLayer::onMyButton));
-
-		/**
-		 * Here we access the `bottom-menu` node by its ID, and add our button to it.
-		 * Node IDs are a Geode feature, see this page for more info about it:
-		 * https://docs.geode-sdk.org/tutorials/nodetree
-		 */
-		auto menu = this->getChildByID("bottom-menu");
-		menu->addChild(myButton);
-
-		/**
-		 * The `_spr` string literal operator just prefixes the string with
-		 * your mod id followed by a slash. This is good practice for setting your own node ids.
-		 */
-		myButton->setID("my-button"_spr);
-
-		/**
-		 * We update the layout of the menu to ensure that our button is properly placed.
-		 * This is yet another Geode feature, see this page for more info about it:
-		 * https://docs.geode-sdk.org/tutorials/layouts
-		 */
-		menu->updateLayout();
+		this.m_textArea->setString("Checking for SplitGDPS updates...");
+		this->updateProgress(0);
+		web::WebRequest req = web::WebRequest();
+		req.param("version", version);
+		req.userAgent("");
+		req.timeout(std::chrono::seconds(30));
+		auto ls = LoadingCircle::create();
+		ls->show();
+		auto future = req.get("https://split.ps.fhgdps.com/getSGNeedUpdate.php");
+		this->m_fields->m_listener.spawn(
+			"check update",
+			std::move(future), // you can also do `req.post()` directly here instead
+			[](web::WebResponse response)
+			{
+				auto res = response.json();
+				// matjson::Value thing is returned from res
+				//  Get the value of "latest" key
+				auto latest = res["latest"];
+				auto current = version;
+				auto updateURL = res["updateURL"];
+				auto forceUpdate = res["forceUpdate"];
+				loadingCircle->fadeAndRemove();
+				this->updateProgress(10);
+				if (latest != current)
+				{
+					if (forceUpdate)
+					{
+						geode::createQuickPopup("Update Requred", "A required update to SplitGDPS is available.\nVersion: " + latest.asString() + "\nCurrentVersion: " + current.asString(), "exit", "Update", [](auto bool btn2)
+												{
+							if (btn2)
+							{
+								this->updateProgress(15);
+								this.m_textArea->setString("Updating SplitGDPS");
+								// TODO: actually make this
+							} else
+							{
+								CCDirector::sharedDirector()->end();
+							} });
+					}
+					else
+					{
+						geode::createQuickPopup("Update Available", "An update to SplitGDPS is available.\nVersion: " + latest.asString() + "\nCurrentVersion: " + current.asString(), "Later", "Update", [](auto bool btn2)
+												{
+							if (btn2)
+							{
+								this->updateProgress(15);
+								this.m_textArea->setString("Updating SplitGDPS");
+							} else {
+								LoadingLayer::loadingFinished();
+								return;
+							} });
+					}
+				}
+			});
 
 		/**
 		 * We return `true` to indicate that the class was properly initialized.
 		 */
-		return true;
-	}
 
-	/**
-	 * This is the callback function for the button we created earlier.
-	 * The signature for button callbacks must always be the same,
-	 * return type `void` and taking a `CCObject*`.
-	 */
-	void onMyButton(CCObject *)
-	{
-		FLAlertLayer::create("Geode", "Hello from my custom mod!", "OK")->show();
+		LoadingLayer::loadingFinished()
 	}
-};
